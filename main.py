@@ -6,6 +6,7 @@ from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
 from panda3d.core import TransparencyAttrib
 from panda3d.core import CardMaker, TextureStage, Loader
+from direct.gui.DirectGui import DirectButton
 from panda3d.core import Vec3
 import Object
 import numpy as np
@@ -22,6 +23,14 @@ class Main(ShowBase):
         self.win.requestProperties(props)
         self.is_dragging = False
         self.last_mouse_pos = None
+        self.setBackgroundColor(0, 0, 0)
+
+        #constants
+        self.speed_factor = 1
+        self.start_cords = (0, -10000, 4000)
+        self.dt = 0.01
+        self.grid_visible = True
+        self.grid_node = None
 
         # Listen for mouse button events
         self.accept("mouse1", self.startDrag)   # left mouse down
@@ -33,47 +42,84 @@ class Main(ShowBase):
 
         #Objects
         self.objects = []
-
+        '''
+        # Sun
+        self.sun = Object.Object3D(
+            self, "models/sun.glb",
+            position=(0,0,0),
+            scale=25,
+            rotation=(0, 90, 0),
+            mass=1500
+        )
+        self.objects.append(self.sun)
         # Earth
         self.earth = Object.Object3D(
             self, "models/earth.glb",
-            position=(0, 0, 0),
+            position=(4000, 0, 0),
             scale=1,
             rotation=(0, 90, 0),
-            mass=25
+            velocity=(0, 1500, 0),
+            mass=10
         )
         self.objects.append(self.earth)
-
-        # Moon (only this will move)
-        self.moon = Object.Object3D(
-            self, "models/moon.glb",
-            position=(1500, 0, 0),
-            scale=30,
-            rotation=(0, 90, 0),
-            velocity=(0, 1000, 0),
-            mass=0.125
-        )
-        self.objects.append(self.moon)
-
-        
+        '''
+  
         # Grid
-        grid = self.make_grid(size=100000, step=100, z=0)
-        grid.reparentTo(self.render)
-        grid.setHpr(0, 0, 0)
+        if self.grid_visible:
+            self.grid_node = self.make_grid(size=100000, step=100, z=0)
+            self.grid_node.setName("grid")
+            self.grid_node.reparentTo(self.render)
+            self.grid_node.setHpr(0, 0, 0)
 
-        cam_pos = self.camera.getPos()
-        self.posText = OnscreenText(
-            text="",
-            pos=(-1.7, -0.9),        # top-left corner
+        # UI Text
+
+        # Controls
+        self.controlsText = OnscreenText(
+            text="W,S,A,D = Move, Space/Shift = Up/Down, Mouse Drag = Rotate, Scroll = Zoom",
+            pos=(-1.1, 0.9),
             scale=0.06,
-            fg=(1, 1, 1, 1),        # white text
+            fg=(1, 1, 1, 1),
+            align=TextNode.ALeft,
+            font=self.font,
+        )
+        # stats
+        self.statsText = OnscreenText(
+            text=f"dt = {self.dt}\nSpeed = {self.speed_factor}X\nIntegrator = RK4",
+            pos=(1.3, -0.8),
+            scale=0.06,
+            fg=(1, 1, 1, 1),
+            align=TextNode.ALeft,
+            font=self.font,  
+            mayChange=True
+        )
+        # Camera Position
+        self.CameraPosText = OnscreenText(
+            text="",
+            pos=(-1.7, -0.9),
+            scale=0.06,
+            fg=(1, 1, 1, 1),
             align=TextNode.ALeft,
             font=self.font,  
             mayChange=True
         )
 
+        # Buttons
+        self.Toggle_Grid_button = DirectButton(
+            text=f"Grid: {'On' if self.grid_visible else 'Off'}",  
+            scale=0.075,   # careful: scale is BIG, 1 means fullscreen
+            pos=(-1.6, 0, 0.8),
+            command=self.toggle_grid_function
+        )
+        self.Add_Object_button = DirectButton(
+            text=f"Add",  
+            scale=0.075,
+            pos=(-1.6, 0, 0.9),
+            command=self.add_object
+        )
+
         # Add update task
-        self.taskMgr.add(self.update_physics, "physicsTask")
+        for _ in range(0, self.speed_factor):
+            self.taskMgr.add(self.update_physics, "physicsTask")
         self.taskMgr.add(self.updateCamera, "updateCamera")
         self.taskMgr.add(self.updateUI, "updateUI")
     
@@ -81,8 +127,7 @@ class Main(ShowBase):
 
     def update_physics(self, task):
         """Update physics for all objects applying gravity on each other."""
-        dt = task.dt * 15
-
+        dt = self.dt
         for i in self.objects:
             for j in self.objects:
                 if i != j:
@@ -90,13 +135,30 @@ class Main(ShowBase):
         
         return task.cont
 
-#--------------------------Grid----------------------------------
+    def add_object(self):
+        """Add a new object at a random position with random velocity."""
+        import random
+        pos = (0,0,0)
+        vel = (0,0,0)
+        scale = 100
+        mass = 1
+        new_object = Object.Object3D(
+            self, "models/mars.glb",
+            position=pos,
+            scale=scale,
+            rotation=(0, 0, 0),
+            velocity=vel,
+            mass=mass
+        )
+        self.objects.append(new_object)
+        
+#--------------------------UI----------------------------------
         
     def make_grid(self, size=1000, step=100, z=0):
         ls = LineSegs()
 
         # --- Grid lines ---
-        ls.setColor(0.5, 0.5, 0.5, 1)  # gray
+        ls.setColor(0.2,0.2,0.2,1)
         for x in range(-size, size + 1, step):
             ls.moveTo(x, -size, z)
             ls.drawTo(x, size, z)
@@ -107,17 +169,45 @@ class Main(ShowBase):
 
         node = ls.create()
         return NodePath(node)
+
+    def toggle_grid_function(self):
+        if self.grid_visible:
+            # Hide grid
+            if self.grid_node:
+                self.grid_node.hide()
+            self.grid_visible = False
+            self.Toggle_Grid_button['text'] = "Grid: Off"
+        else:
+            # Show grid
+            if self.grid_node:
+                self.grid_node.show()
+            else:
+                # Create grid if it doesn't exist
+                self.grid_node = self.make_grid(size=100000, step=100, z=0)
+                self.grid_node.setName("grid")
+                self.grid_node.reparentTo(self.render)
+                self.grid_node.setHpr(0, 0, 0)
+            self.grid_visible = True
+            self.Toggle_Grid_button['text'] = "Grid: On"
+
+    def updateUI(self, task):
+        pos = self.camera.getPos()
+        self.CameraPosText.setText(f" X= {pos.x:.2f}, Y= {pos.y:.2f}, Z= {pos.z:.2f}")
+        return task.cont
     
 #--------------------------Camera----------------------------------
 
     def setupCamera(self):
         self.disableMouse()
-        self.camera.setPos(0, -2500, 1000)
+        self.camera.setPos(self.start_cords)
         self.camera.lookAt(0, 0, 0)
 
     def updateCamera(self, task):
         dt = task.dt
-        speed = 350000
+        if (abs(self.camera.getX())+abs(self.camera.getY())+abs(self.camera.getZ())) > 3000:
+            speed = 600000
+        else:
+            speed = 350000
 
         # get camera forward/right vectors
         cam_forward = self.camera.getQuat(self.render).getForward()
@@ -183,16 +273,18 @@ class Main(ShowBase):
 
     def zoomIn(self):
         # move camera forward along its look direction
-        self.camera.setPos(self.camera, Vec3(0, 100, 0))  
+        zoom_factor = 100
+        if abs(self.camera.getZ()) > 2000:
+            zoom_factor = 1000
+        self.camera.setPos(self.camera, Vec3(0, zoom_factor, 0))  
 
     def zoomOut(self):
+        # move camera forward along its look direction
+        zoom_factor = 100
+        if abs(self.camera.getZ()) > 2000:
+            zoom_factor = 1000
         # move camera backward along its look direction
-        self.camera.setPos(self.camera, Vec3(0, -100, 0))
-
-    def updateUI(self, task):
-        pos = self.camera.getPos()
-        self.posText.setText(f" X= {pos.x:.2f}, Y= {pos.y:.2f}, Z= {pos.z:.2f}")
-        return task.cont
+        self.camera.setPos(self.camera, Vec3(0, -zoom_factor, 0))
     
 
 main = Main()

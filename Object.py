@@ -1,8 +1,8 @@
-import numpy as np
+﻿import numpy as np
 
 class Object3D:
     # Gravitational constant
-    G = 66743000
+    G = 6674384.0  # Adjusted for simulation scale
     
     def __init__(self, parent, model_path, scale=1, position=(0,0,0), velocity=(0,0,0), acceleration=(0,0,0), 
                  rotation=(0,0,0), angular_velocity=(0,0,0), angular_acceleration=(0,0,0), mass=1):
@@ -104,3 +104,7 @@ class Object3D:
         pos_new, vel_new = self.rk4_step(dt, acc_func)
         self.set_position(pos_new)
         self.set_velocity(vel_new)
+    
+
+
+#--------------------------Documentation----------------------------------
