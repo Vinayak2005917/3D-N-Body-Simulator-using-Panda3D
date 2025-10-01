@@ -2,6 +2,8 @@ from direct.showbase.ShowBase import ShowBase
 from panda3d.core import WindowProperties
 from panda3d.core import LineSegs, NodePath
 from direct.gui.OnscreenImage import OnscreenImage
+from direct.gui.OnscreenText import OnscreenText
+from panda3d.core import TextNode
 from panda3d.core import TransparencyAttrib
 from panda3d.core import CardMaker, TextureStage, Loader
 from panda3d.core import Vec3
@@ -11,6 +13,7 @@ import numpy as np
 class Main(ShowBase):
     def __init__(self):
         super().__init__()
+        self.font = self.loader.loadFont("Roboto-VariableFont_wdth,wght.ttf")
 
         # Set window properties
         props = WindowProperties()
@@ -23,92 +26,70 @@ class Main(ShowBase):
         # Listen for mouse button events
         self.accept("mouse1", self.startDrag)   # left mouse down
         self.accept("mouse1-up", self.endDrag)  # left mouse up
-
         self.taskMgr.add(self.dragCamera, "dragCamera")
-
+        self.accept("wheel_up", self.zoomIn)
+        self.accept("wheel_down", self.zoomOut)
         self.setupCamera()
 
+        #Objects
+        self.objects = []
 
-        # First earth
+        # Earth
         self.earth = Object.Object3D(
             self, "models/earth.glb",
             position=(0, 0, 0),
             scale=1,
-            rotation=(0, 90, 0)
+            rotation=(0, 90, 0),
+            mass=25
         )
+        self.objects.append(self.earth)
 
-        # Second earth (will move)
+        # Moon (only this will move)
         self.moon = Object.Object3D(
             self, "models/moon.glb",
-            position=(250, 0, 0),
+            position=(1500, 0, 0),
             scale=30,
             rotation=(0, 90, 0),
-            velocity=(0, 500, 0),
+            velocity=(0, 1000, 0),
             mass=0.125
         )
+        self.objects.append(self.moon)
+
+        
+        # Grid
         grid = self.make_grid(size=100000, step=100, z=0)
         grid.reparentTo(self.render)
         grid.setHpr(0, 0, 0)
 
-        # Add update task
-        self.taskMgr.add(self.apply_gravity_on, "updateTask", extraArgs=[self.moon], appendTask=True)
-        self.taskMgr.add(self.updateCamera, "updateCamera")
-    
+        cam_pos = self.camera.getPos()
+        self.posText = OnscreenText(
+            text="",
+            pos=(-1.7, -0.9),        # top-left corner
+            scale=0.06,
+            fg=(1, 1, 1, 1),        # white text
+            align=TextNode.ALeft,
+            font=self.font,  
+            mayChange=True
+        )
 
+        # Add update task
+        self.taskMgr.add(self.update_physics, "physicsTask")
+        self.taskMgr.add(self.updateCamera, "updateCamera")
+        self.taskMgr.add(self.updateUI, "updateUI")
+    
 #--------------------------Physics----------------------------------
 
-    def acceleration(self, pos_obj, pos_target, G, m_target):
-        r_vec = np.array(pos_target) - np.array(pos_obj)
-        r2 = np.dot(r_vec, r_vec)
-        if r2 == 0:
-            return np.array([0.0, 0.0, 0.0])
-        return G * m_target * r_vec / (r2 * np.sqrt(r2))  # a = F/m, normalized r_vec
-
-    def rk4_step(self, pos, vel, dt, acc_func):
-        # k1
-        a1 = acc_func(pos)
-        v1 = np.array(vel)
-        p1 = np.array(pos)
-
-        # k2
-        a2 = acc_func(p1 + 0.5*v1*dt)
-        v2 = v1 + 0.5*a1*dt
-
-        # k3
-        a3 = acc_func(p1 + 0.5*v2*dt)
-        v3 = v1 + 0.5*a2*dt
-
-        # k4
-        a4 = acc_func(p1 + v3*dt)
-        v4 = v1 + a3*dt
-
-        # Combine
-        pos_new = pos + (v1 + 2*v2 + 2*v3 + v4) * dt / 6
-        vel_new = vel + (a1 + 2*a2 + 2*a3 + a4) * dt / 6
-
-        return pos_new, vel_new
-
-    def apply_gravity_on(self, obj, task):
+    def update_physics(self, task):
+        """Update physics for all objects applying gravity on each other."""
         dt = task.dt * 15
-        G = 66743000
-        pos_target = self.earth.get_position()
-        m_target = self.earth.mass
 
-        pos = np.array(obj.get_position())
-        vel = np.array(obj.get_velocity())
-
-        # RK4 step
-        def acc_func(p):
-            return self.acceleration(p, pos_target, G, m_target)
-
-        pos_new, vel_new = self.rk4_step(pos, vel, dt, acc_func)
-
-        # Update object
-        obj.set_position(pos_new)
-        obj.set_velocity(vel_new)
-
+        for i in self.objects:
+            for j in self.objects:
+                if i != j:
+                    i.apply_gravity_from(j, dt)
+        
         return task.cont
-    
+
 #--------------------------Grid----------------------------------
         
     def make_grid(self, size=1000, step=100, z=0):
@@ -131,36 +112,42 @@ class Main(ShowBase):
 
     def setupCamera(self):
         self.disableMouse()
-        self.camera.setPos(0, 0, 0)
+        self.camera.setPos(0, -2500, 1000)
         self.camera.lookAt(0, 0, 0)
 
     def updateCamera(self, task):
         dt = task.dt
-        speed = 350000   # units per second
+        speed = 350000
 
-        # --- Movement vector ---
+        # get camera forward/right vectors
+        cam_forward = self.camera.getQuat(self.render).getForward()
+        cam_forward.setZ(0)  # flatten to horizontal plane
+        cam_forward.normalize()
+
+        cam_right = self.camera.getQuat(self.render).getRight()
+        cam_right.setZ(0)
+        cam_right.normalize()
+
         move_vec = Vec3(0, 0, 0)
 
-        # WASD relative to where the camera is facing
         if self.mouseWatcherNode.is_button_down('w'):
-            move_vec += Vec3(0, 1, 0)   # forward
+            move_vec += cam_forward
         if self.mouseWatcherNode.is_button_down('s'):
-            move_vec += Vec3(0, -1, 0)  # backward
+            move_vec -= cam_forward
         if self.mouseWatcherNode.is_button_down('a'):
-            move_vec += Vec3(-1, 0, 0)  # left
+            move_vec -= cam_right
         if self.mouseWatcherNode.is_button_down('d'):
-            move_vec += Vec3(1, 0, 0)   # right
+            move_vec += cam_right
 
-        # Space/Shift = up/down in WORLD space (not camera space)
+        if move_vec.length() > 0:
+            move_vec.normalize()
+            self.camera.setPos(self.camera.getPos() + move_vec * speed * dt)
+
+        # Space/Shift = vertical
         if self.mouseWatcherNode.is_button_down('space'):
             self.camera.setZ(self.camera.getZ() + speed * dt)
         if self.mouseWatcherNode.is_button_down('shift'):
             self.camera.setZ(self.camera.getZ() - speed * dt)
-
-        # --- Apply WASD in camera's local XY plane ---
-        if move_vec.length() > 0:
-            move_vec.normalize()
-            self.camera.setPos(self.camera, move_vec * speed * dt)
 
         return task.cont
 
@@ -194,6 +181,19 @@ class Main(ShowBase):
 
         return task.cont
 
+    def zoomIn(self):
+        # move camera forward along its look direction
+        self.camera.setPos(self.camera, Vec3(0, 100, 0))  
+
+    def zoomOut(self):
+        # move camera backward along its look direction
+        self.camera.setPos(self.camera, Vec3(0, -100, 0))
+
+    def updateUI(self, task):
+        pos = self.camera.getPos()
+        self.posText.setText(f" X= {pos.x:.2f}, Y= {pos.y:.2f}, Z= {pos.z:.2f}")
+        return task.cont
+    
 
 main = Main()
 main.run()
